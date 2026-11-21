@@ -180,6 +180,9 @@ body[data-view="discover"] .chips + .chips { padding-bottom: 14px; }
 .hero-info { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .hero-info h2 { font-size: 23px; line-height: 1.15; }
 .rating { color: var(--accent); font-weight: 700; font-size: 14px; }
+.status { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 99px; background: rgba(255,255,255,.12); }
+.status.done { background: var(--ok); color: #04210f; }
+.status svg { width: 14px; height: 14px; stroke-width: 3; }
 .genres { display: flex; flex-wrap: wrap; gap: 5px; }
 .genres span { font-size: 11.5px; padding: 3px 8px; border-radius: 99px; background: rgba(255,255,255,.1); }
 

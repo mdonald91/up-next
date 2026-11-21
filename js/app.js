@@ -137,7 +137,19 @@ function track(sid, list) {
   if (!state.activity[sid]) state.activity[sid] = Date.now();
 }
 
+// Celebrate when ticking finishes a show (ended = Completed) or catches you up (still airing).
+function doneMessage(sid, before, fallback) {
+  if (!isTracked(sid)) return fallback;
+  const after = category(sid);
+  if (after === before) return fallback;
+  const name = state.shows[sid].name;
+  if (after === 'completed') return `🎉 You've completed ${name}!`;
+  if (after === 'caught') return `You're up to date with ${name}`;
+  return fallback;
+}
+
 function markEps(sid, eps, val, msg) {
+  const before = isTracked(sid) ? category(sid) : null;
   const undo = snapshot(sid);
   if (val) {
     if (!isTracked(sid)) track(sid, 'watching');
@@ -146,7 +158,7 @@ function markEps(sid, eps, val, msg) {
   setWatched(sid, eps.map((e) => e.id), val);
   save();
   rerender();
-  toast(msg || (val ? (eps.length === 1 ? `${code(eps[0])} watched` : `${eps.length} episodes watched`) : 'Marked unwatched'), undo);
+  toast(doneMessage(sid, before, msg || (val ? (eps.length === 1 ? `${code(eps[0])} watched` : `${eps.length} episodes watched`) : 'Marked unwatched')), undo);
 }
 
 function toggleEp(sid, eid) {
@@ -171,13 +183,14 @@ function markAlreadyWatched(sid, uptoSeason) {
   if (!c) return;
   const eps = c.eps.filter((e) => isAired(e) && !isWatched(sid, e.id) && (uptoSeason == null || e.s <= uptoSeason));
   if (!eps.length) { toast('Nothing left to mark'); return; }
+  const before = isTracked(sid) ? category(sid) : null;
   const undo = snapshot(sid);
   if (!isTracked(sid)) track(sid, 'watching');
   else if (state.shows[sid].list !== 'watching') { state.shows[sid].list = 'watching'; touch(sid); }
   for (const e of eps) setWatched(sid, [e.id], true, airTime(e) || Date.now());
   save();
   rerender();
-  toast(`${plural(eps.length, 'episode')} marked as already watched`, undo);
+  toast(doneMessage(sid, before, `${plural(eps.length, 'episode')} marked as already watched`), undo);
 }
 
 function askAlreadyWatched(sid) {
@@ -227,7 +240,7 @@ function toast(msg, undo) {
   el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
   if (undo) el.querySelector('button').onclick = () => { el.hidden = true; undo(); };
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 4500);
+  toastTimer = setTimeout(() => { el.hidden = true; }, msg.startsWith('🎉') ? 6000 : 4500);
 }
 
 function sheet(title, buttons) {
@@ -953,6 +966,8 @@ function drawShow(id) {
         <h2>${esc(s.name)}</h2>
         <div class="muted small">${esc(meta)}</div>
         ${s.rating ? `<div class="rating">★ ${s.rating.toFixed(1)}</div>` : ''}
+        ${tracked && category(id) === 'completed' ? `<div class="status done">${ICON.check} Completed</div>` : ''}
+        ${tracked && category(id) === 'caught' ? `<div class="status">Up to date${sm.upcoming ? '' : ' · no new episodes announced yet'}</div>` : ''}
         <div class="genres">${s.genres.map((g) => `<span>${esc(g)}</span>`).join('')}</div>
       </div>
     </div>
