@@ -1,8 +1,9 @@
 import {
-  state, save, getCachedEps, setCachedEps, persistEps, unpersistEps, FRESH_MS,
-  isWatched, setWatched, exportData, importData, clearAll,
+  state, save, setOnSave, getCachedEps, setCachedEps, persistEps, FRESH_MS,
+  isWatched, setWatched, touch, removeShowData, startRewatch, dropRun, exportData, importData, clearAll,
 } from './store.js';
-import { searchShows, fetchShow, fetchCast, fetchSchedule, fetchPerson } from './api.js';
+import { searchShows, searchPeople, fetchShow, fetchCast, fetchSchedule, fetchPerson } from './api.js';
+import { sync, isConnected, lastSynced, syncUser, connect, disconnect, syncNow, schedule } from './sync.js';
 
 // ---------- helpers ----------
 const $ = (s) => document.querySelector(s);
@@ -64,9 +65,8 @@ async function loadShow(id, force = false) {
     .then((res) => {
       if (!res) throw new Error("Couldn't find that show");
       if (state.shows[id]) {
-        const { list, addedAt } = state.shows[id];
-        state.shows[id] = { ...res.show, list, addedAt };
-        save();
+        Object.assign(state.shows[id], res.show);
+        save(true); // info refresh only — no need to sync
       } else tempShows.set(id, res.show);
       setCachedEps(id, res.eps, isTracked(id));
       return res.eps;
@@ -105,12 +105,22 @@ function category(id) {
 
 // ---------- actions ----------
 function snapshot(sid) {
-  const snap = JSON.stringify({ w: state.watched[sid] || null, s: state.shows[sid] || null, a: state.activity[sid] || null });
+  const snap = JSON.stringify({ w: state.watched[sid] || {}, s: state.shows[sid] || null, h: state.history[sid] || null });
   return () => {
     const o = JSON.parse(snap);
-    if (o.w) state.watched[sid] = o.w; else delete state.watched[sid];
-    if (o.s) state.shows[sid] = o.s; else { delete state.shows[sid]; unpersistEps(sid); }
-    if (o.a) state.activity[sid] = o.a; else delete state.activity[sid];
+    if (!o.s) {
+      if (state.shows[sid]) { tempShows.set(sid, state.shows[sid]); removeShowData(sid); }
+    } else {
+      const wasRemoved = !state.shows[sid];
+      state.shows[sid] = { ...o.s, mtime: Date.now() };
+      if (wasRemoved) persistEps(sid);
+      const now = state.watched[sid] || {};
+      setWatched(sid, Object.keys(now).filter((e) => !o.w[e]), false);
+      for (const [e, t] of Object.entries(o.w)) setWatched(sid, [e], true, t);
+      const keep = new Set((o.h || []).map((r) => r.start));
+      for (const run of state.history[sid] || []) if (!keep.has(run.start)) dropRun(sid, run.start);
+      if (o.h) state.history[sid] = o.h; else delete state.history[sid];
+    }
     save(); rerender();
   };
 }
@@ -123,6 +133,7 @@ function track(sid, list) {
     tempShows.delete(sid);
     persistEps(sid);
   } else state.shows[sid].list = list;
+  touch(sid);
   if (!state.activity[sid]) state.activity[sid] = Date.now();
 }
 
@@ -130,7 +141,7 @@ function markEps(sid, eps, val, msg) {
   const undo = snapshot(sid);
   if (val) {
     if (!isTracked(sid)) track(sid, 'watching');
-    else if (state.shows[sid].list !== 'watching') state.shows[sid].list = 'watching';
+    else if (state.shows[sid].list !== 'watching') { state.shows[sid].list = 'watching'; touch(sid); }
   }
   setWatched(sid, eps.map((e) => e.id), val);
   save();
@@ -155,6 +166,7 @@ function toggleEp(sid, eid) {
 
 function toggleSeason(sid, season) {
   const c = getCachedEps(sid);
+  if (!c) return;
   const eps = c.eps.filter((e) => e.s === season && isAired(e));
   if (!eps.length) return;
   const allDone = eps.every((e) => isWatched(sid, e.id));
@@ -164,15 +176,13 @@ function toggleSeason(sid, season) {
 
 function removeShow(sid) {
   const s = state.shows[sid];
+  if (!s) return;
   sheet(`Remove ${s.name} and its watch history?`, [
     {
       label: 'Remove show', danger: true, fn: () => {
         const undo = snapshot(sid);
         tempShows.set(sid, s);
-        delete state.shows[sid];
-        delete state.watched[sid];
-        delete state.activity[sid];
-        unpersistEps(sid);
+        removeShowData(sid);
         save(); rerender();
         toast(`${s.name} removed`, undo);
       },
@@ -219,17 +229,36 @@ function parse() {
   return { name: TITLES[name] || name === 'show' || name === 'person' ? name : 'next', arg: arg ? decodeURIComponent(arg) : null };
 }
 
+// A stack of pages visited in this session: lets Back stay inside the app and
+// return you to the same scroll position.
+const navStack = [];
+const scrollMemory = new Map();
+history.scrollRestoration = 'manual';
+
 function route() {
+  const prevKey = navStack[navStack.length - 1];
+  if (prevKey) scrollMemory.set(prevKey, window.scrollY);
   current = parse();
   token++;
+  const key = `${current.name}/${current.arg || ''}`;
+  const goingBack = navStack.length > 1 && navStack[navStack.length - 2] === key;
+  if (goingBack) navStack.pop(); else if (prevKey !== key) navStack.push(key);
   document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === current.name));
   const top = ['next', 'upcoming', 'discover', 'shows', 'stats'].includes(current.name);
   $('.back').hidden = top;
   $('#search-btn').hidden = current.name === 'search';
   $('#title').textContent = TITLES[current.name] || '';
+  document.title = TITLES[current.name] ? `${TITLES[current.name]} · Up Next` : 'Up Next';
   document.body.dataset.view = current.name;
+  const y = goingBack ? scrollMemory.get(key) || 0 : 0;
   window.scrollTo(0, 0);
   render();
+  if (y) requestAnimationFrame(() => window.scrollTo(0, y));
+}
+
+function setTitle(text) {
+  $('#title').textContent = text;
+  document.title = `${text} · Up Next`;
 }
 
 function render() {
@@ -243,10 +272,48 @@ function rerender() {
   rerenderQueued = true;
   requestAnimationFrame(() => {
     rerenderQueued = false;
+    if (current.name === 'search') { drawResults(); return; } // never wipe what you're typing
     const y = window.scrollY;
+    // keep any episode summaries you had open
+    const openSums = [...view.querySelectorAll('.ep-sum:not([hidden])')].map((el) => el.dataset.ep);
+    // keep anything typed into a text box (e.g. the sync token)
+    const typed = [...view.querySelectorAll('input[id]')].map((i) => [i.id, i.value, document.activeElement === i]);
     render();
+    for (const [id, val, focused] of typed) {
+      const i = document.getElementById(id);
+      if (i && !i.value) { i.value = val; if (focused) i.focus(); }
+    }
+    for (const id of openSums) { const el = view.querySelector(`.ep-sum[data-ep="${id}"]`); if (el) el.hidden = false; }
     window.scrollTo(0, y);
   });
+}
+
+// ---------- new-episode alerts ----------
+const SEEN_KEY = 'upnext.seen';
+if (!localStorage.getItem(SEEN_KEY)) localStorage.setItem(SEEN_KEY, String(Date.now()));
+const lastSeen = () => +localStorage.getItem(SEEN_KEY) || Date.now();
+
+// Episodes of shows you're watching that aired since you last dismissed the alert.
+function newEpisodes() {
+  const seen = lastSeen(), now = Date.now(), out = [];
+  for (const id in state.shows) {
+    if (state.shows[id].list !== 'watching') continue;
+    const c = getCachedEps(id);
+    if (!c) continue;
+    const since = Math.max(seen, state.shows[id].addedAt || 0);
+    for (const e of c.eps) {
+      const t = airTime(e);
+      if (t > since && t <= now && !isWatched(id, e.id)) out.push({ id, e });
+    }
+  }
+  return out;
+}
+
+function updateBadge(n) {
+  try {
+    if (!('setAppBadge' in navigator)) return;
+    if (n > 0) navigator.setAppBadge(n).catch(() => {}); else navigator.clearAppBadge().catch(() => {});
+  } catch (e) { /* not supported */ }
 }
 
 // ---------- view: Up Next ----------
@@ -267,15 +334,26 @@ function renderNext() {
   }
   items.sort((a, b) => (state.activity[b.id] || 0) - (state.activity[a.id] || 0));
 
+  const fresh = newEpisodes();
+  updateBadge(fresh.length);
+  const freshShows = [...new Set(fresh.map((f) => state.shows[f.id].name))];
+  const banner = fresh.length ? `<div class="alert">
+      <div><b>${plural(fresh.length, 'new episode')}</b> since you last checked
+      <span>${esc(freshShows.slice(0, 4).join(', '))}${freshShows.length > 4 ? ` +${freshShows.length - 4} more` : ''}</span></div>
+      <button data-action="seen">Got it</button>
+    </div>` : '';
+
   let html = items.map(({ id, s, sm }) => {
     const e = sm.next;
     const started = sm.watched > 0;
+    // NEW = an episode you haven't watched came out in the last week
+    const isNew = sm.eps.some((x) => isAired(x) && Date.now() - airTime(x) < 7 * DAY && !isWatched(id, x.id));
     return `<article class="card" data-action="open" data-show="${id}">
       ${poster(s.img, s.name)}
       <div class="card-body">
-        <div class="card-show">${esc(s.name)}</div>
+        <div class="card-show">${esc(s.name)}${isNew ? '<span class="badge">NEW</span>' : ''}</div>
         <div class="card-ep"><b>${code(e)}</b> ${esc(e.name)}</div>
-        <div class="card-meta">${started ? `${plural(sm.left, 'episode')} left` : 'Not started'} · ${esc(fmtDate(airTime(e)))}</div>
+        <div class="card-meta">${s.rewatch ? `Rewatch${s.rewatch > 1 ? ` #${s.rewatch}` : ''} · ` : ''}${started ? `${plural(sm.left, 'episode')} left` : 'Not started'} · ${esc(fmtDate(airTime(e)))}</div>
         <div class="bar"><i style="width:${sm.aired ? Math.round(((sm.aired - sm.left) / sm.aired) * 100) : 0}%"></i></div>
       </div>
       <button class="tick" data-action="ep" data-show="${id}" data-ep="${e.id}" aria-label="Mark ${code(e)} watched">${ICON.check}</button>
@@ -286,7 +364,7 @@ function renderNext() {
   if (!items.length && !pending) {
     html = empty("You're all caught up 🎉", 'New episodes of your shows will show up here once they air.', '#/upcoming', "See what's coming");
   }
-  view.innerHTML = `<div class="list">${html}</div>`;
+  view.innerHTML = `${banner}<div class="list">${html}</div>`;
 }
 
 function empty(title, text, href, cta) {
@@ -436,7 +514,7 @@ function discoverSections(d) {
 
   for (const [id, s, n, t] of d.eps) {
     const sh = d.shows[id];
-    if (!sh || !ok(sh)) continue;
+    if (!sh || !t || !ok(sh)) continue;
     const tm = t.length === 10 ? Date.parse(t + 'T12:00:00') : Date.parse(t);
     if (isNaN(tm)) continue;
     const day = startOfDay(tm);
@@ -511,6 +589,8 @@ function renderDiscover() {
 
 // ---------- view: My Shows ----------
 let showsFilter = 'all';
+let showsSort = localStorage.getItem('upnext.sort') || 'name';
+const SORTS = [['name', 'A–Z'], ['recent', 'Recently watched'], ['next', 'Next airing'], ['left', 'Most episodes left'], ['added', 'Recently added']];
 const FILTERS = [
   ['all', 'All'], ['watching', 'Watching'], ['caught', 'Up to date'], ['plan', 'Plan to watch'], ['completed', 'Completed'], ['stopped', 'Stopped'],
 ];
@@ -524,25 +604,37 @@ function renderShows() {
   const cats = Object.fromEntries(ids.map((id) => [id, category(id)]));
   const counts = { all: ids.length };
   for (const c of Object.values(cats)) counts[c] = (counts[c] || 0) + 1;
+  const sums = Object.fromEntries(ids.map((id) => [id, summary(id)]));
+  const byName = (a, b) => state.shows[a].name.localeCompare(state.shows[b].name);
+  const nextAir = (id) => (sums[id].upcoming ? airTime(sums[id].upcoming) : Infinity);
+  const sorters = {
+    name: byName,
+    recent: (a, b) => (state.activity[b] || 0) - (state.activity[a] || 0) || byName(a, b),
+    next: (a, b) => nextAir(a) - nextAir(b) || byName(a, b),
+    left: (a, b) => sums[b].left - sums[a].left || byName(a, b),
+    added: (a, b) => (state.shows[b].addedAt || 0) - (state.shows[a].addedAt || 0) || byName(a, b),
+  };
   const list = ids
     .filter((id) => showsFilter === 'all' || cats[id] === showsFilter)
-    .sort((a, b) => state.shows[a].name.localeCompare(state.shows[b].name));
+    .sort(sorters[showsSort] || byName);
 
   const chips = FILTERS.filter(([k]) => k === 'all' || counts[k]).map(([k, label]) =>
     `<button class="chip ${showsFilter === k ? 'on' : ''}" data-action="filter" data-f="${k}">${label} <span>${counts[k] || 0}</span></button>`).join('');
 
   const grid = list.map((id) => {
     const s = state.shows[id];
-    const sm = summary(id);
+    const sm = sums[id];
     const pct = sm.aired ? Math.round(((sm.aired - sm.left) / sm.aired) * 100) : 0;
+    const sub = showsSort === 'next' && sm.upcoming ? `<div class="tile-sub">${esc(relDay(airTime(sm.upcoming)))}</div>` : '';
     return `<a class="tile" href="#/show/${id}">
       <div class="tile-img">${poster(s.img, s.name)}${sm.left > 0 && cats[id] !== 'plan' ? `<span class="count">${sm.left}</span>` : ''}${cats[id] === 'completed' ? `<span class="count ok">${ICON.check}</span>` : ''}</div>
       <div class="bar"><i style="width:${pct}%"></i></div>
-      <div class="tile-name">${esc(s.name)}</div>
+      <div class="tile-name">${esc(s.name)}</div>${sub}
     </a>`;
   }).join('');
 
   view.innerHTML = `<div class="chips">${chips}</div>
+    <div class="sort-row"><label>Sort <select data-action="sort">${SORTS.map(([k, l]) => `<option value="${k}" ${showsSort === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
     ${list.length ? `<div class="grid">${grid}</div>` : '<p class="muted center pad">No shows here.</p>'}`;
 }
 
@@ -552,11 +644,14 @@ function renderStats() {
   const genres = {};
   const weeks = new Array(12).fill(0);
   const now = Date.now();
-  for (const sid in state.watched) {
+  const runs = [];
+  for (const sid in state.watched) runs.push([sid, state.watched[sid]]);
+  for (const sid in state.history) for (const run of state.history[sid]) runs.push([sid, run.eps]);
+  for (const [sid, epsMap] of runs) {
     const s = state.shows[sid];
     const c = getCachedEps(sid);
     const byId = new Map(c ? c.eps.map((e) => [e.id, e]) : []);
-    for (const [eid, ts] of Object.entries(state.watched[sid])) {
+    for (const [eid, ts] of Object.entries(epsMap)) {
       eps++;
       const rt = byId.get(eid)?.rt || s?.runtime || 30;
       mins += rt;
@@ -597,9 +692,10 @@ function renderStats() {
       <p class="muted small">${month} episodes in the last 30 days</p>
     </section>
     ${topG.length ? `<section class="panel"><h3>Top genres</h3>${topG.map(([g, n]) => `<div class="hbar"><span>${esc(g)}</span><div><i style="width:${(n / maxG) * 100}%"></i></div><em>${n}</em></div>`).join('')}</section>` : ''}
+    ${syncPanel()}
     <section class="panel">
       <h3>Your data</h3>
-      <p class="muted small">Everything is saved on this device. Back it up now and then so you never lose your history.</p>
+      <p class="muted small">${isConnected() ? 'Saved on this device and synced to your private gist.' : 'Saved on this device only. Turn on sync above, or back up now and then so you never lose your history.'}</p>
       <div class="btn-row">
         <button class="btn" data-action="export">Export backup</button>
         <label class="btn">Import backup<input type="file" accept="application/json,.json" data-action="import" hidden></label>
@@ -612,14 +708,52 @@ function renderStats() {
     <p class="credit">Show data from <a href="https://www.tvmaze.com" target="_blank" rel="noopener">TVmaze</a> (CC BY-SA).</p>`;
 }
 
+function ago(t) {
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} hr ago`;
+  return fmtDate(t);
+}
+
+function syncPanel() {
+  if (!isConnected()) {
+    return `<section class="panel">
+      <h3>Sync between devices</h3>
+      <p class="muted small">Keep your shows the same on your phone, PC and tablet, and never lose them. Your data is saved to a private GitHub Gist that only you can see.</p>
+      <ol class="steps small">
+        <li><a href="https://github.com/settings/tokens/new?scopes=gist&description=Up%20Next%20sync" target="_blank" rel="noopener">Create a GitHub token</a>. Only <b>gist</b> is ticked. Set Expiration to <b>No expiration</b>, then tap Generate.</li>
+        <li>Copy the token and paste it here. Do the same on each device you use.</li>
+      </ol>
+      <input id="gh-token" class="field" type="password" placeholder="ghp_…" autocomplete="off" spellcheck="false">
+      <div class="btn-row"><button class="btn primary" data-action="sync-connect">Turn on sync</button></div>
+    </section>`;
+  }
+  const state_ = sync.busy ? 'Syncing…' : sync.error ? `<span class="err">${esc(sync.error)}</span>` : `Last synced ${esc(ago(lastSynced()))}`;
+  return `<section class="panel">
+    <h3>Sync between devices <span class="ok-dot">● On</span></h3>
+    <p class="muted small">${syncUser() ? `GitHub: <b>${esc(syncUser())}</b> · ` : ''}${state_}</p>
+    <div class="btn-row">
+      <button class="btn" data-action="sync-now" ${sync.busy ? 'disabled' : ''}>Sync now</button>
+      <button class="btn danger-text" data-action="sync-off">Turn off sync</button>
+    </div>
+  </section>`;
+}
+
 // ---------- view: Search ----------
 let lastQuery = '';
 let lastResults = [];
+let searchMode = 'shows';
 let searchTimer;
 
 function renderSearch() {
   view.innerHTML = `<div class="search">
-      <input id="q" type="search" placeholder="Search for a show…" autocomplete="off" enterkeyhint="search" value="${esc(lastQuery)}">
+      <input id="q" type="search" placeholder="${searchMode === 'people' ? 'Search for an actor…' : 'Search for a show…'}" autocomplete="off" enterkeyhint="search" value="${esc(lastQuery)}">
+      <div class="seg small-seg">
+        <button class="${searchMode === 'shows' ? 'on' : ''}" data-action="search-mode" data-v="shows">Shows</button>
+        <button class="${searchMode === 'people' ? 'on' : ''}" data-action="search-mode" data-v="people">People</button>
+      </div>
     </div>
     <div id="results" class="list"></div>`;
   const q = $('#q');
@@ -637,11 +771,12 @@ async function doSearch(q) {
   if (!q) { lastResults = []; drawResults(); return; }
   const box = $('#results');
   if (box) box.innerHTML = '<div class="spinner"></div>';
+  const mode = searchMode;
   try {
-    const res = await searchShows(q);
-    if (q !== lastQuery) return;
+    const res = mode === 'people' ? await searchPeople(q) : await searchShows(q);
+    if (q !== lastQuery || mode !== searchMode) return;
     lastResults = res;
-    for (const s of res) if (!state.shows[s.id]) tempShows.set(s.id, s);
+    if (mode === 'shows') for (const s of res) if (!state.shows[s.id]) tempShows.set(s.id, s);
   } catch (err) {
     if (box && q === lastQuery) box.innerHTML = `<p class="muted center pad">${esc(err.message || "Couldn't search right now")}</p>`;
     return;
@@ -652,8 +787,22 @@ async function doSearch(q) {
 function drawResults() {
   const box = $('#results');
   if (!box) return;
-  if (!lastQuery) { box.innerHTML = '<p class="muted center pad">Find shows by name, then add them to start tracking.</p>'; return; }
-  if (!lastResults.length) { box.innerHTML = '<p class="muted center pad">No shows found.</p>'; return; }
+  if (!lastQuery) {
+    box.innerHTML = `<p class="muted center pad">${searchMode === 'people' ? 'Find an actor to see every show they’ve been in.' : 'Find shows by name, then add them to start tracking.'}</p>`;
+    return;
+  }
+  if (!lastResults.length) { box.innerHTML = `<p class="muted center pad">No ${searchMode === 'people' ? 'people' : 'shows'} found.</p>`; return; }
+  if (searchMode === 'people') {
+    box.innerHTML = lastResults.map((p) => `<a class="row" href="#/person/${p.id}">
+      ${p.img ? `<img class="thumb" src="${esc(p.img)}" alt="" loading="lazy">` : `<div class="thumb ph">${esc(p.name.slice(0, 1))}</div>`}
+      <div class="row-body">
+        <div class="row-title">${esc(p.name)}</div>
+        <div class="row-sub">${esc([p.country, p.birthday ? `born ${year(p.birthday)}` : ''].filter(Boolean).join(' · '))}</div>
+      </div>
+      <span class="chev-r">${ICON.chev}</span>
+    </a>`).join('');
+    return;
+  }
   box.innerHTML = lastResults.map((s) => {
     const on = isTracked(s.id);
     const meta = [year(s.premiered), s.network, s.status].filter(Boolean).join(' · ');
@@ -677,7 +826,7 @@ async function renderShow(id) {
   const my = token;
   if (!showInfo(id) || !getCachedEps(id)) {
     const known = showInfo(id);
-    $('#title').textContent = known ? known.name : '';
+    if (known) setTitle(known.name);
     view.innerHTML = '<div class="spinner"></div>';
     try { await loadShow(id); }
     catch (err) {
@@ -696,7 +845,7 @@ function drawShow(id) {
   const s = showInfo(id);
   const sm = summary(id);
   const tracked = isTracked(id);
-  $('#title').textContent = s.name;
+  setTitle(s.name);
 
   const seasons = new Map();
   for (const e of sm.eps) {
@@ -759,6 +908,10 @@ function drawShow(id) {
       <div class="progress-top"><span>${sm.aired - sm.left} of ${sm.aired} watched</span><span>${sm.left ? `${plural(sm.left, 'episode')} left` : 'All caught up'}</span></div>
       <div class="bar big"><i style="width:${pct}%"></i></div>
     </div>` : ''}
+    ${tracked && (sm.watched > 0 || (state.history[id] || []).length) ? `<div class="mini-actions">
+      <span class="muted small">${(state.history[id] || []).length ? `Watched ${plural(state.history[id].length, 'time')} before${s.rewatch ? ` · now on rewatch${s.rewatch > 1 ? ` #${s.rewatch}` : ''}` : ''}` : ''}</span>
+      ${sm.watched > 0 ? `<button class="link-btn" data-action="rewatch" data-show="${id}">↻ Start a rewatch</button>` : ''}
+    </div>` : ''}
     ${nextLine}
     ${s.summary ? `<p class="summary clamp" data-action="expand">${esc(s.summary)}</p>` : ''}
     <div id="cast"></div>
@@ -775,7 +928,7 @@ function epRow(sid, e) {
     <div class="ep-main" data-action="ep-info">
       <div class="ep-title"><span class="ep-n">${e.n}</span>${esc(e.name)}</div>
       <div class="ep-date">${aired ? esc(fmtDate(t)) : `Airs ${esc(relDay(t))}${e.stamp && !isNaN(t) ? `, ${esc(fmtTime(t))}` : ''}`}</div>
-      ${e.sum ? `<div class="ep-sum" hidden>${esc(e.sum)}</div>` : ''}
+      ${e.sum ? `<div class="ep-sum" data-ep="${e.id}" hidden>${esc(e.sum)}</div>` : ''}
     </div>
     <button class="chk ${w ? 'w' : ''}" data-action="ep" data-show="${sid}" data-ep="${e.id}" ${aired ? '' : 'disabled'} aria-label="${w ? 'Unmark' : 'Mark'} ${code(e)}">${ICON.check}</button>
   </div>`;
@@ -817,14 +970,15 @@ async function renderPerson(id) {
     personCache.set(id, p);
     if (my !== token) return;
   }
-  $('#title').textContent = p.name;
+  setTitle(p.name);
   for (const c of p.credits) if (!state.shows[c.show.id]) tempShows.set(c.show.id, c.show);
 
   const today = new Date().toISOString().slice(0, 10);
   const soon = [], now = [], past = [];
   for (const c of p.credits) {
     const st = c.show.status;
-    if (st === 'In Development' || !c.show.premiered || c.show.premiered > today) soon.push(c);
+    const upcoming = st === 'In Development' || (c.show.premiered ? c.show.premiered > today : st !== 'Ended');
+    if (upcoming) soon.push(c);
     else if (st === 'Running') now.push(c);
     else past.push(c);
   }
@@ -891,7 +1045,7 @@ document.addEventListener('click', async (ev) => {
 
   switch (a) {
     case 'back':
-      if (history.length > 1) history.back(); else location.hash = '#/next';
+      if (navStack.length > 1) history.back(); else location.hash = '#/next';
       break;
     case 'open':
       location.hash = `#/show/${sid}`;
@@ -938,10 +1092,53 @@ document.addEventListener('click', async (ev) => {
     }
     case 'list':
       state.shows[sid].list = el.dataset.list;
+      touch(sid);
       save(); rerender();
       break;
     case 'remove':
       removeShow(sid);
+      break;
+    case 'rewatch': {
+      const name = state.shows[sid].name;
+      sheet(`Start a rewatch of ${name}? Your ticks are saved to your history (and still count in Stats), then cleared so you can tick episodes off again.`, [
+        {
+          label: 'Start rewatch', primary: true, fn: () => {
+            const undo = snapshot(sid);
+            if (startRewatch(sid)) { openSeasons.delete(sid); save(); rerender(); toast(`Rewatching ${name}`, undo); }
+          },
+        },
+      ]);
+      break;
+    }
+    case 'seen':
+      localStorage.setItem(SEEN_KEY, String(Date.now()));
+      updateBadge(0);
+      rerender();
+      break;
+    case 'search-mode':
+      if (searchMode === el.dataset.v) break;
+      searchMode = el.dataset.v;
+      lastResults = [];
+      renderSearch();
+      if (lastQuery) doSearch(lastQuery);
+      break;
+    case 'sync-connect': {
+      const input = $('#gh-token');
+      el.disabled = true;
+      el.textContent = 'Connecting…';
+      connect(input ? input.value : '')
+        .then(() => { toast('Sync is on'); refreshAll(false); rerender(); })
+        .catch((err) => { toast(err.message || "Couldn't connect"); el.disabled = false; el.textContent = 'Turn on sync'; });
+      break;
+    }
+    case 'sync-now':
+      syncNow().then(() => toast(sync.error ? sync.error : 'Synced'));
+      rerender();
+      break;
+    case 'sync-off':
+      sheet('Turn off sync on this device? Your data stays here and in your gist.', [
+        { label: 'Turn off sync', danger: true, fn: () => { disconnect(); toast('Sync turned off'); rerender(); } },
+      ]);
       break;
     case 'filter':
       showsFilter = el.dataset.f;
@@ -980,7 +1177,9 @@ document.addEventListener('click', async (ev) => {
       refreshAll(true);
       break;
     case 'clear':
-      sheet('Erase all your shows and watch history from this device? This cannot be undone.', [
+      sheet(isConnected()
+        ? 'Erase all your shows and watch history? Sync is on, so this also erases them on your other devices. This cannot be undone.'
+        : 'Erase all your shows and watch history from this device? This cannot be undone.', [
         { label: 'Erase everything', danger: true, fn: () => { clearAll(); toast('All data erased'); rerender(); } },
       ]);
       break;
@@ -988,6 +1187,13 @@ document.addEventListener('click', async (ev) => {
 });
 
 document.addEventListener('change', (ev) => {
+  const sortSel = ev.target.closest('[data-action="sort"]');
+  if (sortSel) {
+    showsSort = sortSel.value;
+    localStorage.setItem('upnext.sort', showsSort);
+    rerender();
+    return;
+  }
   const input = ev.target.closest('[data-action="import"]');
   if (!input || !input.files[0]) return;
   const file = input.files[0];
@@ -1006,30 +1212,45 @@ document.addEventListener('change', (ev) => {
 
 // ---------- background refresh ----------
 let refreshing = false;
+let refreshAgain = false;
 async function refreshAll(force) {
-  if (refreshing) return;
+  if (refreshing) { refreshAgain = true; return; }
   const ids = Object.keys(state.shows).filter((id) => {
     const c = getCachedEps(id);
     return force || !c || Date.now() - c.at > FRESH_MS;
   });
-  if (!ids.length) return;
+  if (!ids.length) { updateBadge(newEpisodes().length); return; }
   refreshing = true;
   if (force) toast(`Refreshing ${plural(ids.length, 'show')}…`);
   let failed = 0;
   await Promise.all(ids.map((id) => loadShow(id, true).then(() => rerender()).catch(() => { failed++; })));
   refreshing = false;
   if (force) toast(failed ? `Couldn't refresh ${plural(failed, 'show')} — check your connection` : 'All shows up to date');
+  updateBadge(newEpisodes().length);
   rerender();
+  if (refreshAgain) { refreshAgain = false; refreshAll(false); }
 }
 
+let lastWake = Date.now();
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { refreshAll(false); rerender(); }
+  if (document.visibilityState !== 'visible') return;
+  refreshAll(false);
+  if (Date.now() - lastWake > 30000) { lastWake = Date.now(); syncNow(); }
+  rerender();
 });
+
+// sync hooks
+setOnSave(() => schedule());
+sync.onChange = () => { refreshAll(false); rerender(); };
+sync.onStatus = () => { if (current.name === 'stats') rerender(); };
 
 // ---------- start ----------
 window.addEventListener('hashchange', route);
 route();
 refreshAll(false);
+syncNow();
+// Ask the browser not to clear our storage when space runs low.
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

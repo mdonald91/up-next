@@ -1,9 +1,9 @@
 // Offline support: the app shell is network-first (so updates arrive right away)
 // with a cached fallback; posters are cached as you browse.
-const SHELL_CACHE = 'upnext-shell-v6';
+const SHELL_CACHE = 'upnext-shell-v7';
 const IMG_CACHE = 'upnext-img-v1';
 const SHELL = [
-  './', 'index.html', 'styles.css', 'js/app.js', 'js/api.js', 'js/store.js',
+  './', 'index.html', 'styles.css', 'js/app.js', 'js/api.js', 'js/store.js', 'js/sync.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 
@@ -40,10 +40,22 @@ self.addEventListener('fetch', (e) => {
   if (url.hostname === 'static.tvmaze.com') {
     e.respondWith(
       caches.open(IMG_CACHE).then((c) => c.match(req).then((hit) => hit || fetch(req).then((res) => {
-        if (res.ok || res.type === 'opaque') c.put(req, res.clone());
+        if (res.ok || res.type === 'opaque') c.put(req, res.clone()).then(() => trim(c));
         return res;
       }))),
     );
   }
   // api.tvmaze.com goes straight to the network — the app keeps its own episode cache.
 });
+
+// Keep the poster cache from growing forever.
+const IMG_MAX = 400;
+let trimming = false;
+async function trim(cache) {
+  if (trimming) return;
+  trimming = true;
+  try {
+    const keys = await cache.keys();
+    for (let i = 0; i < keys.length - IMG_MAX; i++) await cache.delete(keys[i]);
+  } finally { trimming = false; }
+}

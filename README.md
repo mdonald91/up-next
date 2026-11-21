@@ -14,6 +14,11 @@ It runs in the browser and can be installed to your phone's home screen. It has 
 - **My Shows**: a poster grid you can filter by Watching, Up to date, Plan to watch, Completed and Stopped
 - **Actor pages**: tap anyone in a show's cast to see their upcoming, current and past series
 - **Stats**: time spent watching, episodes per week, and top genres
+- **Sync**: keep devices in step through a private GitHub Gist (paste a token that can only touch gists)
+- **New-episode alerts**: a banner, NEW tags and an app-icon badge for episodes that aired since you last checked
+- **Rewatch**: start a show again without losing your history; rewatches count in Stats
+- **Sorting**: sort My Shows by name, recently watched, next airing, most left or recently added
+- **People search**: find actors directly from Search
 - **Backup**: export and import your data as a JSON file
 - **Offline**: the app shell and posters are cached
 
@@ -45,7 +50,8 @@ GitHub Pages serves the `main` branch root (Settings → Pages → Deploy from b
 | `styles.css` | All styling (dark theme, mobile-first) |
 | `js/app.js` | Routing, views, actions |
 | `js/api.js` | TVmaze API calls (rate-limited queue) |
-| `js/store.js` | localStorage persistence, episode cache, backup |
+| `js/store.js` | localStorage persistence, episode cache, merge logic, backup |
+| `js/sync.js` | Optional GitHub Gist sync |
 | `sw.js` | Service worker for offline use |
 
 ## Credits

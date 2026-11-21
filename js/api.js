@@ -72,7 +72,7 @@ export async function fetchSchedule(date, country) {
   const out = [];
   for (const e of res || []) {
     const sh = e.show || e._embedded?.show;
-    if (!sh || e.number == null || e.season == null) continue;
+    if (!sh || e.number == null || e.season == null || !(e.airstamp || e.airdate)) continue;
     const show = slimShow(sh);
     delete show.summary;
     delete show.imgLg;
@@ -91,7 +91,7 @@ export function slimEp(e) {
     stamp: e.airstamp || null,
     rt: e.runtime || null,
     img: e.image?.medium || null,
-    sum: strip(e.summary).slice(0, 500),
+    sum: strip(e.summary).slice(0, 320),
   };
 }
 
@@ -148,4 +148,15 @@ export async function fetchPerson(id) {
     country: p.country?.name || '',
     credits: [...byShow.values()],
   };
+}
+
+export async function searchPeople(q) {
+  const res = await get(`/search/people?q=${encodeURIComponent(q)}`);
+  return (res || []).map((r) => ({
+    id: String(r.person.id),
+    name: r.person.name,
+    img: r.person.image?.medium || null,
+    country: r.person.country?.name || '',
+    birthday: r.person.birthday || null,
+  }));
 }
