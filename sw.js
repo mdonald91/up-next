@@ -1,6 +1,6 @@
 // Offline support: the app shell is network-first (so updates arrive right away)
 // with a cached fallback; posters are cached as you browse.
-const SHELL_CACHE = 'upnext-shell-v3';
+const SHELL_CACHE = 'upnext-shell-v4';
 const IMG_CACHE = 'upnext-img-v1';
 const SHELL = [
   './', 'index.html', 'styles.css', 'js/app.js', 'js/api.js', 'js/store.js',
@@ -26,7 +26,8 @@ self.addEventListener('fetch', (e) => {
 
   if (url.origin === location.origin) {
     e.respondWith(
-      fetch(req)
+      // no-cache: always ask GitHub Pages if the file changed, so updates show up straight away
+      fetch(req, { cache: 'no-cache' })
         .then((res) => {
           if (res.ok) { const copy = res.clone(); caches.open(SHELL_CACHE).then((c) => c.put(req, copy)); }
           return res;
