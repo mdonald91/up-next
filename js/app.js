@@ -338,12 +338,14 @@ function renderUpcoming() {
 // over a window of 7 days back to 14 days ahead. Cached for 6 hours.
 const DISC_KEY = 'upnext.disc';
 const DISC_TTL = 6 * 3600 * 1000;
-const REGIONS = [['US', 'US'], ['AU', 'Australia'], ['GB', 'UK'], ['CA', 'Canada']];
-const TYPES = [['all', 'All'], ['Scripted', 'Drama & Comedy'], ['Animation', 'Animation'], ['Reality', 'Reality'], ['Documentary', 'Docs']];
+const REGIONS = [['US', 'US'], ['AU', 'Australia'], ['GB', 'UK'], ['CA', 'Canada'], ['JP', 'Japan'], ['KR', 'Korea'], ['CN', 'China']];
+const LANGS = [['any', 'Any language'], ['English', 'English'], ['Japanese', 'Japanese'], ['Korean', 'Korean'], ['Chinese', 'Chinese']];
+const REGION_LANG = { US: 'English', AU: 'English', GB: 'English', CA: 'English', JP: 'Japanese', KR: 'Korean', CN: 'Chinese' };
+const TYPES = [['all', 'All'], ['anime', 'Anime'], ['Scripted', 'Drama & Comedy'], ['Animation', 'Animation'], ['Reality', 'Reality'], ['Documentary', 'Docs']];
 const SKIP_TYPES = new Set(['News', 'Sports', 'Talk Show', 'Award Show']);
 const disc = {
   region: localStorage.getItem('upnext.region') || 'US',
-  english: localStorage.getItem('upnext.english') !== '0',
+  lang: localStorage.getItem('upnext.lang') || (localStorage.getItem('upnext.english') === '0' ? 'any' : 'English'),
   type: 'all',
   data: null,
   partial: null,
@@ -420,8 +422,15 @@ function discoverSections(d) {
   const today = startOfDay(Date.now());
   // TVmaze sometimes leaves language blank, so also reject titles in non-Latin scripts.
   const latin = (t) => !/[^\u0000-\u024F\u2000-\u206F\u20A0-\u20CF\u2100-\u214F]/.test(t);
-  const ok = (s) => (disc.type === 'all' || s.type === disc.type)
-    && (!disc.english || ((!s.language || s.language === 'English') && latin(s.name)));
+  const isAnime = (s) => (s.genres || []).includes('Anime') || (s.type === 'Animation' && s.language === 'Japanese');
+  const langOk = (s) => {
+    if (disc.lang === 'any' || disc.type === 'anime') return true; // anime is Japanese by definition
+    if (disc.lang === 'English') return (!s.language || s.language === 'English') && latin(s.name);
+    if (disc.lang === 'Chinese') return ['Chinese', 'Mandarin', 'Cantonese'].includes(s.language);
+    return s.language === disc.lang;
+  };
+  const typeOk = (s) => disc.type === 'all' || (disc.type === 'anime' ? isAnime(s) : s.type === disc.type);
+  const ok = (s) => typeOk(s) && langOk(s);
   const popular = new Map(), onToday = new Map(), soon = new Map(), just = new Map(), back = new Map();
   const keep = (map, id, item) => { const prev = map.get(id); if (!prev || item.t < prev.t) map.set(id, item); };
 
@@ -491,8 +500,8 @@ function renderDiscover() {
   }
 
   view.innerHTML = `
-    <div class="chips">${chips(REGIONS, disc.region, 'region')}
-      <button class="chip ${disc.english ? 'on' : ''}" data-action="english">English only</button></div>
+    <div class="chips">${chips(REGIONS, disc.region, 'region')}</div>
+    <div class="chips">${chips(LANGS, disc.lang, 'lang')}</div>
     <div class="chips">${chips(TYPES, disc.type, 'dtype')}</div>
     ${body}
     <p class="credit">TV channels shown for the region picked; streaming services are always included. Schedules from <a href="https://www.tvmaze.com" target="_blank" rel="noopener">TVmaze</a>.</p>`;
@@ -861,13 +870,15 @@ document.addEventListener('click', async (ev) => {
       if (disc.region === el.dataset.v) break;
       disc.region = el.dataset.v;
       localStorage.setItem('upnext.region', disc.region);
+      // picking an Asian region switches the language to match (and back to English for the others)
+      if (disc.lang !== 'any') { disc.lang = REGION_LANG[disc.region]; localStorage.setItem('upnext.lang', disc.lang); }
       disc.job = null;
       loadDiscover(true);
       rerender();
       break;
-    case 'english':
-      disc.english = !disc.english;
-      localStorage.setItem('upnext.english', disc.english ? '1' : '0');
+    case 'lang':
+      disc.lang = el.dataset.v;
+      localStorage.setItem('upnext.lang', disc.lang);
       rerender();
       break;
     case 'dtype':

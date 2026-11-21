@@ -159,7 +159,7 @@ main { max-width: 760px; margin: 0 auto; padding: 12px 14px; }
 
 /* ---------- Discover ---------- */
 body[data-view="discover"] .chips { padding-bottom: 8px; }
-body[data-view="discover"] .chips + .chips { padding-bottom: 14px; }
+body[data-view="discover"] .chips + .chips + .chips { padding-bottom: 14px; }
 .dsec { margin: 6px 0 20px; }
 .dsec h3 { font-size: 17px; margin: 0 0 10px; display: flex; align-items: baseline; gap: 6px; }
 .dsec h3 span { font-size: 13px; font-weight: 500; color: var(--muted); }
