@@ -416,14 +416,22 @@ function renderUpcoming() {
 // over a window of 7 days back to 14 days ahead. Cached for 6 hours.
 const DISC_KEY = 'upnext.disc';
 const DISC_TTL = 6 * 3600 * 1000;
-const REGIONS = [['US', 'US'], ['AU', 'Australia'], ['GB', 'UK'], ['CA', 'Canada'], ['JP', 'Japan'], ['KR', 'Korea'], ['CN', 'China']];
-const LANGS = [['any', 'Any language'], ['English', 'English'], ['Japanese', 'Japanese'], ['Korean', 'Korean'], ['Chinese', 'Chinese']];
-const REGION_LANG = { US: 'English', AU: 'English', GB: 'English', CA: 'English', JP: 'Japanese', KR: 'Korean', CN: 'Chinese' };
+// One pick sets both: which country's TV channels to load, and which language of
+// streaming shows to keep. Worldwide = US channels + every streaming show, any language.
+const REGIONS = {
+  US: { label: 'US', country: 'US', lang: 'English' },
+  GB: { label: 'UK', country: 'GB', lang: 'English' },
+  AU: { label: 'Australia', country: 'AU', lang: 'English' },
+  CA: { label: 'Canada', country: 'CA', lang: 'English' },
+  JP: { label: 'Japan', country: 'JP', lang: 'Japanese' },
+  KR: { label: 'Korea', country: 'KR', lang: 'Korean' },
+  CN: { label: 'China', country: 'CN', lang: 'Chinese' },
+  WW: { label: 'Worldwide', country: 'US', lang: 'any' },
+};
 const TYPES = [['all', 'All'], ['anime', 'Anime'], ['Scripted', 'Drama & Comedy'], ['Animation', 'Animation'], ['Reality', 'Reality'], ['Documentary', 'Docs']];
 const SKIP_TYPES = new Set(['News', 'Sports', 'Talk Show', 'Award Show']);
 const disc = {
-  region: localStorage.getItem('upnext.region') || 'US',
-  lang: localStorage.getItem('upnext.lang') || (localStorage.getItem('upnext.english') === '0' ? 'any' : 'English'),
+  region: REGIONS[localStorage.getItem('upnext.region')] ? localStorage.getItem('upnext.region') : 'US',
   type: 'all',
   data: null,
   partial: null,
@@ -439,7 +447,7 @@ function isoDay(offset) {
 }
 
 function loadDiscover(force) {
-  const region = disc.region;
+  const region = REGIONS[disc.region].country; // US and Worldwide share the same download
   const fresh = (d) => d && d.region === region && Date.now() - d.at < DISC_TTL;
   if (!force && fresh(disc.data)) return;
   if (!force && !disc.data) {
@@ -502,10 +510,11 @@ function discoverSections(d) {
   const latin = (t) => !/[^\u0000-\u024F\u2000-\u206F\u20A0-\u20CF\u2100-\u214F]/.test(t);
   const isAnime = (s) => (s.genres || []).includes('Anime') || (s.type === 'Animation' && s.language === 'Japanese');
   const langOk = (s) => {
-    if (disc.lang === 'any' || disc.type === 'anime') return true; // anime is Japanese by definition
-    if (disc.lang === 'English') return (!s.language || s.language === 'English') && latin(s.name);
-    if (disc.lang === 'Chinese') return ['Chinese', 'Mandarin', 'Cantonese'].includes(s.language);
-    return s.language === disc.lang;
+    const lang = REGIONS[disc.region].lang;
+    if (lang === 'any' || disc.type === 'anime') return true; // anime is Japanese by definition
+    if (lang === 'English') return (!s.language || s.language === 'English') && latin(s.name);
+    if (lang === 'Chinese') return ['Chinese', 'Mandarin', 'Cantonese'].includes(s.language);
+    return s.language === lang;
   };
   const typeOk = (s) => disc.type === 'all' || (disc.type === 'anime' ? isAnime(s) : s.type === disc.type);
   const ok = (s) => typeOk(s) && langOk(s);
@@ -549,8 +558,6 @@ function discCard(sh, label) {
 
 function renderDiscover() {
   loadDiscover(false);
-  const scrolls = {};
-  view.querySelectorAll('.carousel[data-k]').forEach((c) => { scrolls[c.dataset.k] = c.scrollLeft; });
 
   const d = disc.data || disc.partial;
   const loading = !!disc.job;
@@ -578,13 +585,30 @@ function renderDiscover() {
   }
 
   view.innerHTML = `
-    <div class="chips">${chips(REGIONS, disc.region, 'region')}</div>
-    <div class="chips">${chips(LANGS, disc.lang, 'lang')}</div>
-    <div class="chips">${chips(TYPES, disc.type, 'dtype')}</div>
+    <div class="chips" data-k="disc-regions">${chips(Object.entries(REGIONS).map(([k, r]) => [k, r.label]), disc.region, 'region')}</div>
+    <div class="chips" data-k="disc-types">${chips(TYPES, disc.type, 'dtype')}</div>
     ${body}
-    <p class="credit">TV channels shown for the region picked; streaming services are always included. Schedules from <a href="https://www.tvmaze.com" target="_blank" rel="noopener">TVmaze</a>.</p>`;
+    <p class="credit">Each region shows its local TV channels plus streaming shows in its language (Worldwide shows everything). Schedules from <a href="https://www.tvmaze.com" target="_blank" rel="noopener">TVmaze</a>.</p>`;
+  restoreSideScroll();
+}
 
-  view.querySelectorAll('.carousel[data-k]').forEach((c) => { if (scrolls[c.dataset.k]) c.scrollLeft = scrolls[c.dataset.k]; });
+// Sideways rows (Discover carousels, chip rows, cast) remember where you left them,
+// so opening a show and coming back puts you in the same spot.
+const sideScroll = new Map();
+function sideKey(el) { return `${current.name}/${current.arg || ''}/${el.dataset.k}`; }
+function restoreSideScroll() {
+  view.querySelectorAll('[data-k]').forEach((el) => {
+    const x = sideScroll.get(sideKey(el));
+    if (x) el.scrollLeft = x;
+  });
+}
+document.addEventListener('scroll', (ev) => {
+  const el = ev.target;
+  if (el && el.dataset && el.dataset.k) sideScroll.set(sideKey(el), el.scrollLeft);
+}, true);
+function forgetCarousels() {
+  // new filter = new content, so start the rows from the left
+  for (const k of [...sideScroll.keys()]) if (k.startsWith('discover/') && !k.endsWith('/disc-regions') && !k.endsWith('/disc-types')) sideScroll.delete(k);
 }
 
 // ---------- view: My Shows ----------
@@ -947,10 +971,11 @@ function drawCast(id) {
   const box = $('#cast');
   const cast = castCache.get(id);
   if (!box || !cast || !cast.length) return;
-  box.innerHTML = `<h3 class="sub">Cast</h3><div class="cast">${cast.map((c) => `<a class="person" ${c.id ? `href="#/person/${c.id}"` : ''}>
+  box.innerHTML = `<h3 class="sub">Cast</h3><div class="cast" data-k="cast">${cast.map((c) => `<a class="person" ${c.id ? `href="#/person/${c.id}"` : ''}>
       ${c.img ? `<img src="${esc(c.img)}" alt="" loading="lazy">` : `<div class="ph">${esc(c.person.slice(0, 1))}</div>`}
       <b>${esc(c.person)}</b><span>${esc(c.character)}</span>
     </a>`).join('')}</div>`;
+  restoreSideScroll();
 }
 
 // ---------- view: Person ----------
@@ -1144,23 +1169,19 @@ document.addEventListener('click', async (ev) => {
       showsFilter = el.dataset.f;
       rerender();
       break;
-    case 'region':
+    case 'region': {
       if (disc.region === el.dataset.v) break;
+      const needsDownload = REGIONS[disc.region].country !== REGIONS[el.dataset.v].country;
       disc.region = el.dataset.v;
       localStorage.setItem('upnext.region', disc.region);
-      // picking an Asian region switches the language to match (and back to English for the others)
-      if (disc.lang !== 'any') { disc.lang = REGION_LANG[disc.region]; localStorage.setItem('upnext.lang', disc.lang); }
-      disc.job = null;
-      loadDiscover(true);
+      forgetCarousels();
+      if (needsDownload) { disc.job = null; loadDiscover(true); }
       rerender();
       break;
-    case 'lang':
-      disc.lang = el.dataset.v;
-      localStorage.setItem('upnext.lang', disc.lang);
-      rerender();
-      break;
+    }
     case 'dtype':
       disc.type = el.dataset.v;
+      forgetCarousels();
       rerender();
       break;
     case 'export': {
