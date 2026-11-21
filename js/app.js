@@ -418,7 +418,10 @@ function loadDiscover(force) {
 
 function discoverSections(d) {
   const today = startOfDay(Date.now());
-  const ok = (s) => (disc.type === 'all' || s.type === disc.type) && (!disc.english || !s.language || s.language === 'English');
+  // TVmaze sometimes leaves language blank, so also reject titles in non-Latin scripts.
+  const latin = (t) => !/[^\u0000-\u024F\u2000-\u206F\u20A0-\u20CF\u2100-\u214F]/.test(t);
+  const ok = (s) => (disc.type === 'all' || s.type === disc.type)
+    && (!disc.english || ((!s.language || s.language === 'English') && latin(s.name)));
   const popular = new Map(), onToday = new Map(), soon = new Map(), just = new Map(), back = new Map();
   const keep = (map, id, item) => { const prev = map.get(id); if (!prev || item.t < prev.t) map.set(id, item); };
 
@@ -432,7 +435,7 @@ function discoverSections(d) {
     if (day === today) keep(onToday, id, { sh, t: tm, stamp: t.length > 10 });
     if (n === 1) {
       if (s === 1) keep(day >= today ? soon : just, id, { sh, t: tm });
-      else if (day >= today - 3 * DAY) keep(back, id, { sh, t: tm, s });
+      else if (s < 1900 && day >= today - 3 * DAY) keep(back, id, { sh, t: tm, s }); // skip yearly specials ("Season 2026")
     }
   }
   for (const id of soon.keys()) just.delete(id);
