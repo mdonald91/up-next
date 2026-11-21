@@ -871,7 +871,7 @@ async function renderPerson(id) {
       <div>
         <h2>${esc(p.name)}</h2>
         ${[born, died, p.country].filter(Boolean).map((x) => `<div class="muted small">${esc(x)}</div>`).join('')}
-        <div class="muted small">${plural(p.credits.length, 'series')}</div>
+        <div class="muted small">${p.credits.length} series</div>
       </div>
     </div>
     ${section('Coming up', soon, (s) => [s.premiered ? `Premieres ${fmtDate(Date.parse(s.premiered + 'T12:00:00'), true)}` : s.status || 'Upcoming', s.network].filter(Boolean).join(' · '))}
