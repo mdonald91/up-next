@@ -495,7 +495,7 @@ function renderDiscover() {
       row('back', 'Returning seasons', '', sec.back, (x) => `S${x.s} · ${relDay(x.t)}`),
       row('just', 'New series', 'just premiered', sec.just, (x) => `${relDay(x.t)} · ${net(x.sh)}`),
       row('today', 'On today', '', sec.today, (x) => (x.stamp ? `${fmtTime(x.t)} · ` : '') + net(x.sh)),
-    ].join('') || '<p class="muted center pad">Nothing matches these filters.</p>';
+    ].join('') || (loading ? '<div class="spinner"></div>' : '<p class="muted center pad">Nothing matches these filters.</p>');
     if (loading) body = `<p class="muted center small">Loading schedules… ${Math.round((disc.done / disc.total) * 100)}%</p>` + body;
   }
 
