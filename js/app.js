@@ -612,7 +612,7 @@ function renderDiscover() {
     const sec = discoverSections(d);
     const row = (k, title, sub, items, label) => items.length ? `<section class="dsec">
         <h3>${title}${sub ? `<span>${sub}</span>` : ''}</h3>
-        <div class="carousel" data-k="${k}">${items.map((x) => discCard(x.sh, label(x))).join('')}</div>
+        ${sideRow(`<div class="carousel" data-k="${k}">${items.map((x) => discCard(x.sh, label(x))).join('')}</div>`)}
       </section>` : '';
     const net = (sh) => sh.network || '';
     body = [
@@ -641,12 +641,59 @@ function restoreSideScroll() {
   view.querySelectorAll('[data-k]').forEach((el) => {
     const x = sideScroll.get(sideKey(el));
     if (x) el.scrollLeft = x;
+    updateEdges(el);
   });
 }
 document.addEventListener('scroll', (ev) => {
   const el = ev.target;
-  if (el && el.dataset && el.dataset.k) sideScroll.set(sideKey(el), el.scrollLeft);
+  if (el && el.dataset && el.dataset.k) { sideScroll.set(sideKey(el), el.scrollLeft); updateEdges(el); }
 }, true);
+
+// ---------- sideways rows on a computer: arrows + click-and-drag ----------
+const ARROW_L = '<svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>';
+const ARROW_R = '<svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>';
+function sideRow(inner) {
+  return `<div class="crow at-start">
+    <button class="cnav prev" data-action="row-scroll" data-dir="-1" aria-label="Scroll left">${ARROW_L}</button>
+    ${inner}
+    <button class="cnav next" data-action="row-scroll" data-dir="1" aria-label="Scroll right">${ARROW_R}</button>
+  </div>`;
+}
+function updateEdges(el) {
+  const row = el.parentElement;
+  if (!row || !row.classList.contains('crow')) return;
+  row.classList.toggle('at-start', el.scrollLeft <= 4);
+  row.classList.toggle('at-end', el.scrollLeft + el.clientWidth >= el.scrollWidth - 4);
+}
+window.addEventListener('resize', () => view.querySelectorAll('.crow > [data-k]').forEach(updateEdges));
+
+let drag = null;
+let suppressClick = false;
+document.addEventListener('pointerdown', (ev) => {
+  if (ev.pointerType !== 'mouse' || ev.button !== 0) return;
+  const el = ev.target.closest('.crow > [data-k]');
+  if (!el || ev.target.closest('button')) return;
+  drag = { el, x: ev.clientX, left: el.scrollLeft, moved: false };
+});
+document.addEventListener('pointermove', (ev) => {
+  if (!drag) return;
+  const dx = ev.clientX - drag.x;
+  if (!drag.moved && Math.abs(dx) > 5) { drag.moved = true; drag.el.classList.add('dragging'); }
+  if (drag.moved) drag.el.scrollLeft = drag.left - dx;
+});
+document.addEventListener('pointerup', () => {
+  if (!drag) return;
+  if (drag.moved) {
+    drag.el.classList.remove('dragging');
+    suppressClick = true; // the click that follows a drag shouldn't open a show
+    setTimeout(() => { suppressClick = false; }, 60);
+  }
+  drag = null;
+});
+document.addEventListener('click', (ev) => {
+  if (suppressClick) { ev.preventDefault(); ev.stopPropagation(); suppressClick = false; }
+}, true);
+document.addEventListener('dragstart', (ev) => { if (ev.target.closest && ev.target.closest('.crow')) ev.preventDefault(); });
 function forgetCarousels() {
   // new filter = new content, so start the rows from the left
   for (const k of [...sideScroll.keys()]) if (k.startsWith('discover/') && !k.endsWith('/disc-regions') && !k.endsWith('/disc-types')) sideScroll.delete(k);
@@ -1016,10 +1063,10 @@ function drawCast(id) {
   const box = $('#cast');
   const cast = castCache.get(id);
   if (!box || !cast || !cast.length) return;
-  box.innerHTML = `<h3 class="sub">Cast</h3><div class="cast" data-k="cast">${cast.map((c) => `<a class="person" ${c.id ? `href="#/person/${c.id}"` : ''}>
+  box.innerHTML = `<h3 class="sub">Cast</h3>${sideRow(`<div class="cast" data-k="cast">${cast.map((c) => `<a class="person" ${c.id ? `href="#/person/${c.id}"` : ''}>
       ${c.img ? `<img src="${esc(c.img)}" alt="" loading="lazy">` : `<div class="ph">${esc(c.person.slice(0, 1))}</div>`}
       <b>${esc(c.person)}</b><span>${esc(c.character)}</span>
-    </a>`).join('')}</div>`;
+    </a>`).join('')}</div>`)}`;
   restoreSideScroll();
 }
 
@@ -1168,6 +1215,11 @@ document.addEventListener('click', async (ev) => {
     case 'remove':
       removeShow(sid);
       break;
+    case 'row-scroll': {
+      const row = el.parentElement.querySelector('[data-k]');
+      row.scrollBy({ left: +el.dataset.dir * row.clientWidth * 0.8, behavior: 'smooth' });
+      break;
+    }
     case 'seen-it':
       if (!getCachedEps(sid)) await loadShow(sid).catch(() => {});
       askAlreadyWatched(sid);

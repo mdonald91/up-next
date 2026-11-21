@@ -323,3 +323,63 @@ a.row { color: inherit; }
   .hero-poster { width: 150px; height: 220px; }
   .hero-info h2 { font-size: 30px; }
 }
+
+/* ---------- sideways row arrows (mouse) ---------- */
+.crow { position: relative; }
+.cnav { display: none; }
+.dragging { cursor: grabbing; scroll-snap-type: none !important; user-select: none; }
+.dragging * { pointer-events: none; }
+@media (hover: hover) and (pointer: fine) {
+  .crow > [data-k] { cursor: grab; }
+  .cnav {
+    display: grid; place-items: center; position: absolute; top: 70px; z-index: 3;
+    width: 40px; height: 40px; border-radius: 50%;
+    background: rgba(13, 16, 22, .88); border: 1px solid var(--line); color: var(--text);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, .5); opacity: 0; transition: opacity .15s;
+  }
+  .cnav:hover { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .cnav.prev { left: -6px; }
+  .cnav.next { right: -6px; }
+  .crow:hover .cnav { opacity: 1; }
+  .crow.at-start .cnav.prev, .crow.at-end .cnav.next { opacity: 0 !important; pointer-events: none; }
+  .cast + .cnav, .crow:has(.cast) .cnav { top: 22px; }
+}
+
+/* ---------- desktop layout ---------- */
+@media (min-width: 1024px) {
+  body { padding-left: 232px; padding-bottom: 32px; }
+  .top { left: 232px; padding-left: 16px; padding-right: 16px; }
+  .top .back + h1, .top h1 { font-size: 22px; }
+  main { max-width: 1320px; padding: 20px 32px; }
+
+  .tabs {
+    top: 0; bottom: 0; right: auto; width: 232px; height: auto;
+    display: flex; flex-direction: column; gap: 4px;
+    padding: calc(16px + env(safe-area-inset-top)) 12px 16px;
+    border-top: 0; border-right: 1px solid rgba(255, 255, 255, .06);
+  }
+  .tabs::before { content: "Up Next"; font-size: 22px; font-weight: 800; color: var(--accent); padding: 6px 14px 18px; }
+  .tabs a { flex-direction: row; justify-content: flex-start; gap: 14px; padding: 12px 14px; border-radius: 12px; font-size: 15px; }
+  .tabs a:hover { background: var(--bg2); color: var(--text); }
+  .tabs a.on { background: var(--bg2); }
+
+  .chips { flex-wrap: wrap; overflow: visible; margin: 0; padding-left: 0; padding-right: 0; }
+  .carousel, .cast { margin: 0; padding-left: 0; padding-right: 0; scroll-padding: 0; }
+  .dcard { width: 150px; }
+  .dcard .poster { width: 150px; height: 220px; }
+  .cnav { top: 90px; }
+
+  body[data-view="next"] .list { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 14px; }
+  body[data-view="upcoming"] .list, body[data-view="search"] main, body[data-view="person"] main { max-width: 900px; margin: 0 auto; }
+  body[data-view="show"] main, body[data-view="stats"] main { max-width: 1000px; }
+  .stat-grid { grid-template-columns: repeat(4, 1fr); }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 22px 18px; }
+  .show-hero { margin: -20px -32px 0; padding: 28px 32px 22px; }
+  .hero-poster { width: 180px; height: 264px; }
+  .hero-info h2 { font-size: 34px; }
+
+  .toast { left: calc(50% + 116px); bottom: 28px; }
+  .sheet { align-items: center; }
+  .sheet-card { border-radius: 20px; padding-bottom: 20px; }
+  .search { top: var(--top); }
+}

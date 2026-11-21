@@ -21,6 +21,7 @@ It runs in the browser and can be installed to your phone's home screen. It has 
 - **Sorting**: sort My Shows by name, recently watched, next airing, most left or recently added
 - **People search**: find actors directly from Search
 - **Backup**: export and import your data as a JSON file
+- **Works on PC too**: sidebar layout on wide screens, arrows and click-and-drag on sideways rows
 - **Offline**: the app shell and posters are cached
 
 ## Install on your phone
