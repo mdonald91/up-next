@@ -2,7 +2,7 @@ import {
   state, save, getCachedEps, setCachedEps, persistEps, unpersistEps, FRESH_MS,
   isWatched, setWatched, exportData, importData, clearAll,
 } from './store.js';
-import { searchShows, fetchShow, fetchCast } from './api.js';
+import { searchShows, fetchShow, fetchCast, fetchSchedule } from './api.js';
 
 // ---------- helpers ----------
 const $ = (s) => document.querySelector(s);
@@ -212,7 +212,7 @@ function sheet(title, buttons) {
 // ---------- routing ----------
 let current = { name: 'next', arg: null };
 let token = 0;
-const TITLES = { next: 'Up Next', upcoming: 'Upcoming', shows: 'My Shows', stats: 'Stats', search: 'Search' };
+const TITLES = { next: 'Up Next', upcoming: 'Upcoming', discover: 'Discover', shows: 'My Shows', stats: 'Stats', search: 'Search' };
 
 function parse() {
   const [, name, arg] = location.hash.split('/');
@@ -223,7 +223,7 @@ function route() {
   current = parse();
   token++;
   document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === current.name));
-  const top = ['next', 'upcoming', 'shows', 'stats'].includes(current.name);
+  const top = ['next', 'upcoming', 'discover', 'shows', 'stats'].includes(current.name);
   $('.back').hidden = top;
   $('#search-btn').hidden = current.name === 'search';
   $('#title').textContent = TITLES[current.name] || '';
@@ -233,7 +233,7 @@ function route() {
 }
 
 function render() {
-  const r = { next: renderNext, upcoming: renderUpcoming, shows: renderShows, stats: renderStats, search: renderSearch, show: renderShow }[current.name];
+  const r = { next: renderNext, upcoming: renderUpcoming, discover: renderDiscover, shows: renderShows, stats: renderStats, search: renderSearch, show: renderShow }[current.name];
   r(current.arg);
 }
 
@@ -331,6 +331,170 @@ function renderUpcoming() {
     </article>`;
   }
   view.innerHTML = `<div class="list">${html}</div>`;
+}
+
+// ---------- view: Discover ----------
+// Built from TVmaze's daily schedules (TV for one region + all streaming services),
+// over a window of 7 days back to 14 days ahead. Cached for 6 hours.
+const DISC_KEY = 'upnext.disc';
+const DISC_TTL = 6 * 3600 * 1000;
+const REGIONS = [['US', 'US'], ['AU', 'Australia'], ['GB', 'UK'], ['CA', 'Canada']];
+const TYPES = [['all', 'All'], ['Scripted', 'Drama & Comedy'], ['Animation', 'Animation'], ['Reality', 'Reality'], ['Documentary', 'Docs']];
+const SKIP_TYPES = new Set(['News', 'Sports', 'Talk Show', 'Award Show']);
+const disc = {
+  region: localStorage.getItem('upnext.region') || 'US',
+  english: localStorage.getItem('upnext.english') !== '0',
+  type: 'all',
+  data: null,
+  partial: null,
+  job: null,
+  done: 0,
+  total: 0,
+};
+
+function isoDay(offset) {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function loadDiscover(force) {
+  const region = disc.region;
+  const fresh = (d) => d && d.region === region && Date.now() - d.at < DISC_TTL;
+  if (!force && fresh(disc.data)) return;
+  if (!force && !disc.data) {
+    try {
+      const c = JSON.parse(localStorage.getItem(DISC_KEY));
+      if (fresh(c)) { disc.data = c; return; }
+    } catch (e) { /* ignore */ }
+  }
+  if (!force && disc.job && disc.job.region === region) return;
+
+  const job = { region };
+  disc.job = job;
+  const data = { region, at: Date.now(), shows: {}, eps: [] };
+  const seen = new Set();
+  disc.partial = data;
+  if (disc.data && disc.data.region !== region) disc.data = null;
+
+  const offsets = [0];
+  for (let i = 1; i <= 14; i++) offsets.push(i);
+  for (let i = 1; i <= 7; i++) offsets.push(-i);
+  const tasks = offsets.flatMap((o) => [[isoDay(o), region], [isoDay(o), null]]);
+  disc.done = 0;
+  disc.total = tasks.length;
+
+  let last = 0;
+  const tick = () => {
+    if (current.name !== 'discover' || Date.now() - last < 1200) return;
+    last = Date.now();
+    rerender();
+  };
+
+  Promise.all(tasks.map(([date, country]) => fetchSchedule(date, country)
+    .then((list) => {
+      if (disc.job !== job) return;
+      for (const x of list) {
+        if (SKIP_TYPES.has(x.show.type)) continue;
+        const key = `${x.show.id}|${x.s}|${x.n}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (!data.shows[x.show.id]) data.shows[x.show.id] = x.show;
+        data.eps.push([x.show.id, x.s, x.n, x.t]);
+      }
+    })
+    .catch(() => {})
+    .finally(() => { if (disc.job === job) { disc.done++; tick(); } })))
+    .then(() => {
+      if (disc.job !== job) return;
+      disc.job = null;
+      disc.partial = null;
+      data.at = Date.now();
+      disc.data = data;
+      try { localStorage.setItem(DISC_KEY, JSON.stringify(data)); } catch (e) { /* too big — memory only */ }
+      if (current.name === 'discover') rerender();
+    });
+}
+
+function discoverSections(d) {
+  const today = startOfDay(Date.now());
+  const ok = (s) => (disc.type === 'all' || s.type === disc.type) && (!disc.english || !s.language || s.language === 'English');
+  const popular = new Map(), onToday = new Map(), soon = new Map(), just = new Map(), back = new Map();
+  const keep = (map, id, item) => { const prev = map.get(id); if (!prev || item.t < prev.t) map.set(id, item); };
+
+  for (const [id, s, n, t] of d.eps) {
+    const sh = d.shows[id];
+    if (!sh || !ok(sh)) continue;
+    const tm = t.length === 10 ? Date.parse(t + 'T12:00:00') : Date.parse(t);
+    if (isNaN(tm)) continue;
+    const day = startOfDay(tm);
+    if (Math.abs(day - today) <= 3 * DAY) popular.set(id, { sh, t: tm });
+    if (day === today) keep(onToday, id, { sh, t: tm, stamp: t.length > 10 });
+    if (n === 1) {
+      if (s === 1) keep(day >= today ? soon : just, id, { sh, t: tm });
+      else if (day >= today - 3 * DAY) keep(back, id, { sh, t: tm, s });
+    }
+  }
+  for (const id of soon.keys()) just.delete(id);
+  const top = (map, n = 30) => [...map.values()].sort((a, b) => (b.sh.weight || 0) - (a.sh.weight || 0) || a.t - b.t).slice(0, n);
+  return {
+    popular: top(popular),
+    soon: top(soon),
+    just: top(just),
+    back: top(back),
+    today: top(onToday, 40),
+  };
+}
+
+function discCard(sh, label) {
+  const on = isTracked(sh.id);
+  return `<div class="dcard" data-action="open" data-show="${sh.id}">
+    <div class="tile-img">${poster(sh.img, sh.name)}
+      <button class="dadd ${on ? 'on' : ''}" data-action="${on ? 'open' : 'quick-add'}" data-show="${sh.id}" aria-label="${on ? 'Added' : 'Add'} ${esc(sh.name)}">${on ? ICON.check : ICON.plus}</button>
+    </div>
+    <div class="tile-name">${esc(sh.name)}</div>
+    <div class="dsub">${esc(label)}</div>
+  </div>`;
+}
+
+function renderDiscover() {
+  loadDiscover(false);
+  const scrolls = {};
+  view.querySelectorAll('.carousel[data-k]').forEach((c) => { scrolls[c.dataset.k] = c.scrollLeft; });
+
+  const d = disc.data || disc.partial;
+  const loading = !!disc.job;
+  const chips = (items, val, action) => items.map(([k, label]) =>
+    `<button class="chip ${val === k ? 'on' : ''}" data-action="${action}" data-v="${k}">${label}</button>`).join('');
+
+  let body = '';
+  if (!d || (!d.eps.length && loading)) {
+    body = `<div class="spinner"></div><p class="muted center small">Loading TV schedules…</p>`;
+  } else {
+    const sec = discoverSections(d);
+    const row = (k, title, sub, items, label) => items.length ? `<section class="dsec">
+        <h3>${title}${sub ? `<span>${sub}</span>` : ''}</h3>
+        <div class="carousel" data-k="${k}">${items.map((x) => discCard(x.sh, label(x))).join('')}</div>
+      </section>` : '';
+    const net = (sh) => sh.network || '';
+    body = [
+      row('popular', 'Popular this week', '', sec.popular, (x) => net(x.sh)),
+      row('soon', 'New series', 'premiering soon', sec.soon, (x) => relDay(x.t)),
+      row('back', 'Returning seasons', '', sec.back, (x) => `S${x.s} · ${relDay(x.t)}`),
+      row('just', 'New series', 'just premiered', sec.just, (x) => `${relDay(x.t)} · ${net(x.sh)}`),
+      row('today', 'On today', '', sec.today, (x) => (x.stamp ? `${fmtTime(x.t)} · ` : '') + net(x.sh)),
+    ].join('') || '<p class="muted center pad">Nothing matches these filters.</p>';
+    if (loading) body = `<p class="muted center small">Loading schedules… ${Math.round((disc.done / disc.total) * 100)}%</p>` + body;
+  }
+
+  view.innerHTML = `
+    <div class="chips">${chips(REGIONS, disc.region, 'region')}
+      <button class="chip ${disc.english ? 'on' : ''}" data-action="english">English only</button></div>
+    <div class="chips">${chips(TYPES, disc.type, 'dtype')}</div>
+    ${body}
+    <p class="credit">TV channels shown for the region picked; streaming services are always included. Schedules from <a href="https://www.tvmaze.com" target="_blank" rel="noopener">TVmaze</a>.</p>`;
+
+  view.querySelectorAll('.carousel[data-k]').forEach((c) => { if (scrolls[c.dataset.k]) c.scrollLeft = scrolls[c.dataset.k]; });
 }
 
 // ---------- view: My Shows ----------
@@ -669,7 +833,13 @@ document.addEventListener('click', async (ev) => {
       const undo = snapshot(sid);
       track(sid, list);
       save();
-      if (current.name === 'search') drawResults(); else rerender();
+      if (current.name === 'search') drawResults();
+      else if (current.name === 'discover') {
+        el.disabled = false;
+        el.classList.add('on');
+        el.dataset.action = 'open';
+        el.innerHTML = ICON.check;
+      } else rerender();
       toast(`${showInfo(sid).name} added${list === 'plan' ? ' to Plan to watch' : ''}`, undo);
       break;
     }
@@ -682,6 +852,23 @@ document.addEventListener('click', async (ev) => {
       break;
     case 'filter':
       showsFilter = el.dataset.f;
+      rerender();
+      break;
+    case 'region':
+      if (disc.region === el.dataset.v) break;
+      disc.region = el.dataset.v;
+      localStorage.setItem('upnext.region', disc.region);
+      disc.job = null;
+      loadDiscover(true);
+      rerender();
+      break;
+    case 'english':
+      disc.english = !disc.english;
+      localStorage.setItem('upnext.english', disc.english ? '1' : '0');
+      rerender();
+      break;
+    case 'dtype':
+      disc.type = el.dataset.v;
       rerender();
       break;
     case 'export': {

@@ -57,8 +57,28 @@ export function slimShow(s) {
     ended: s.ended || null,
     rating: s.rating?.average ?? null,
     language: s.language || '',
+    type: s.type || '',
+    weight: s.weight || 0,
     summary: strip(s.summary),
   };
+}
+
+// One day of the TV schedule for a country, or of streaming services when country is null.
+export async function fetchSchedule(date, country) {
+  const path = country
+    ? `/schedule?country=${encodeURIComponent(country)}&date=${date}`
+    : `/schedule/web?date=${date}`;
+  const res = await get(path);
+  const out = [];
+  for (const e of res || []) {
+    const sh = e.show || e._embedded?.show;
+    if (!sh || e.number == null || e.season == null) continue;
+    const show = slimShow(sh);
+    delete show.summary;
+    delete show.imgLg;
+    out.push({ show, s: e.season, n: e.number, t: e.airstamp || e.airdate });
+  }
+  return out;
 }
 
 export function slimEp(e) {

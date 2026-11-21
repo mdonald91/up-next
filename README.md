@@ -9,6 +9,7 @@ It runs in the browser and can be installed to your phone's home screen. It has 
 - **Search** any show (data from [TVmaze](https://www.tvmaze.com))
 - **Up Next**: the next unwatched episode for every show you're watching, with one-tap ticking
 - **Episode checklist**: tick episodes or whole seasons. If you skip ahead, it asks whether to mark the earlier episodes too
+- **Discover**: browse what's popular this week, new series premiering soon or just premiered, returning seasons, and what's on today. Filter by region (US, Australia, UK, Canada), genre and English only. Streaming services are always included
 - **Upcoming**: a calendar of new episodes, shown in your local time, with premieres flagged
 - **My Shows**: a poster grid you can filter by Watching, Up to date, Plan to watch, Completed and Stopped
 - **Stats**: time spent watching, episodes per week, and top genres

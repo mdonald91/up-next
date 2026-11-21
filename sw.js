@@ -1,6 +1,6 @@
 // Offline support: the app shell is network-first (so updates arrive right away)
 // with a cached fallback; posters are cached as you browse.
-const SHELL_CACHE = 'upnext-shell-v1';
+const SHELL_CACHE = 'upnext-shell-v2';
 const IMG_CACHE = 'upnext-img-v1';
 const SHELL = [
   './', 'index.html', 'styles.css', 'js/app.js', 'js/api.js', 'js/store.js',
