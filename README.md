@@ -12,6 +12,7 @@ It runs in the browser and can be installed to your phone's home screen. It has 
 - **Discover**: browse what's popular this week, new series premiering soon or just premiered, returning seasons, and what's on today. Filter by region (US, Australia, UK, Canada, Japan, Korea, China), language (English, Japanese, Korean, Chinese) and type, including Anime. Streaming services are always included
 - **Upcoming**: a calendar of new episodes, shown in your local time, with premieres flagged
 - **My Shows**: a poster grid you can filter by Watching, Up to date, Plan to watch, Completed and Stopped
+- **Actor pages**: tap anyone in a show's cast to see their upcoming, current and past series
 - **Stats**: time spent watching, episodes per week, and top genres
 - **Backup**: export and import your data as a JSON file
 - **Offline**: the app shell and posters are cached

@@ -2,7 +2,7 @@ import {
   state, save, getCachedEps, setCachedEps, persistEps, unpersistEps, FRESH_MS,
   isWatched, setWatched, exportData, importData, clearAll,
 } from './store.js';
-import { searchShows, fetchShow, fetchCast, fetchSchedule } from './api.js';
+import { searchShows, fetchShow, fetchCast, fetchSchedule, fetchPerson } from './api.js';
 
 // ---------- helpers ----------
 const $ = (s) => document.querySelector(s);
@@ -216,7 +216,7 @@ const TITLES = { next: 'Up Next', upcoming: 'Upcoming', discover: 'Discover', sh
 
 function parse() {
   const [, name, arg] = location.hash.split('/');
-  return { name: TITLES[name] || name === 'show' ? name : 'next', arg: arg ? decodeURIComponent(arg) : null };
+  return { name: TITLES[name] || name === 'show' || name === 'person' ? name : 'next', arg: arg ? decodeURIComponent(arg) : null };
 }
 
 function route() {
@@ -233,7 +233,7 @@ function route() {
 }
 
 function render() {
-  const r = { next: renderNext, upcoming: renderUpcoming, discover: renderDiscover, shows: renderShows, stats: renderStats, search: renderSearch, show: renderShow }[current.name];
+  const r = { next: renderNext, upcoming: renderUpcoming, discover: renderDiscover, shows: renderShows, stats: renderStats, search: renderSearch, show: renderShow, person: renderPerson }[current.name];
   r(current.arg);
 }
 
@@ -794,10 +794,91 @@ function drawCast(id) {
   const box = $('#cast');
   const cast = castCache.get(id);
   if (!box || !cast || !cast.length) return;
-  box.innerHTML = `<h3 class="sub">Cast</h3><div class="cast">${cast.map((c) => `<div class="person">
+  box.innerHTML = `<h3 class="sub">Cast</h3><div class="cast">${cast.map((c) => `<a class="person" ${c.id ? `href="#/person/${c.id}"` : ''}>
       ${c.img ? `<img src="${esc(c.img)}" alt="" loading="lazy">` : `<div class="ph">${esc(c.person.slice(0, 1))}</div>`}
       <b>${esc(c.person)}</b><span>${esc(c.character)}</span>
-    </div>`).join('')}</div>`;
+    </a>`).join('')}</div>`;
+}
+
+// ---------- view: Person ----------
+const personCache = new Map();
+
+async function renderPerson(id) {
+  const my = token;
+  let p = personCache.get(id);
+  if (!p) {
+    view.innerHTML = '<div class="spinner"></div>';
+    try { p = await fetchPerson(id); }
+    catch (err) {
+      if (my === token) view.innerHTML = `<p class="muted center pad">${esc(err.message || "Couldn't load this person")}</p>`;
+      return;
+    }
+    if (!p) { if (my === token) view.innerHTML = '<p class="muted center pad">Person not found.</p>'; return; }
+    personCache.set(id, p);
+    if (my !== token) return;
+  }
+  $('#title').textContent = p.name;
+  for (const c of p.credits) if (!state.shows[c.show.id]) tempShows.set(c.show.id, c.show);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const soon = [], now = [], past = [];
+  for (const c of p.credits) {
+    const st = c.show.status;
+    if (st === 'In Development' || !c.show.premiered || c.show.premiered > today) soon.push(c);
+    else if (st === 'Running') now.push(c);
+    else past.push(c);
+  }
+  const byDate = (a, b) => (b.show.premiered || '9999').localeCompare(a.show.premiered || '9999');
+  soon.sort((a, b) => (a.show.premiered || '9999').localeCompare(b.show.premiered || '9999'));
+  now.sort(byDate);
+  past.sort(byDate);
+
+  const age = (from, to) => {
+    if (!from) return null;
+    const a = new Date(from), b = to ? new Date(to) : new Date();
+    let y = b.getFullYear() - a.getFullYear();
+    if (b < new Date(b.getFullYear(), a.getMonth(), a.getDate())) y--;
+    return y;
+  };
+  const born = p.birthday ? `Born ${fmtDate(Date.parse(p.birthday + 'T12:00:00'), true)}${p.deathday ? '' : ` (age ${age(p.birthday)})`}` : '';
+  const died = p.deathday ? `Died ${fmtDate(Date.parse(p.deathday + 'T12:00:00'), true)} (age ${age(p.birthday, p.deathday) ?? '?'})` : '';
+
+  const row = (c, label) => {
+    const s = c.show;
+    const on = isTracked(s.id);
+    const role = c.roles.length ? `as ${c.roles.slice(0, 2).join(', ')}${c.voice ? ' (voice)' : ''}` : (c.voice ? 'Voice role' : '');
+    return `<article class="row" data-action="open" data-show="${s.id}">
+      ${poster(s.img, s.name, 'thumb')}
+      <div class="row-body">
+        <div class="row-title">${esc(s.name)}</div>
+        ${role ? `<div class="row-sub">${esc(role)}</div>` : ''}
+        <div class="row-sub dim">${esc(label(s))}</div>
+      </div>
+      <button class="add ${on ? 'on' : ''}" data-action="${on ? 'open' : 'quick-add'}" data-show="${s.id}" aria-label="${on ? 'Added' : 'Add'} ${esc(s.name)}">${on ? ICON.check : ICON.plus}</button>
+    </article>`;
+  };
+  const span = (s) => {
+    const y = year(s.premiered);
+    const end = s.status === 'Ended' && s.ended ? year(s.ended) : s.status === 'Running' ? 'now' : '';
+    return [y && end && end !== y ? `${y}–${end}` : y, s.network].filter(Boolean).join(' · ');
+  };
+  const section = (title, list, label) => list.length
+    ? `<h3 class="sub">${title} <span class="muted small">${list.length}</span></h3><div class="list">${list.map((c) => row(c, label)).join('')}</div>` : '';
+
+  view.innerHTML = `
+    <div class="person-hero">
+      ${p.img ? `<img src="${esc(p.img)}" alt="">` : `<div class="ph">${esc(p.name.slice(0, 1))}</div>`}
+      <div>
+        <h2>${esc(p.name)}</h2>
+        ${[born, died, p.country].filter(Boolean).map((x) => `<div class="muted small">${esc(x)}</div>`).join('')}
+        <div class="muted small">${plural(p.credits.length, 'series')}</div>
+      </div>
+    </div>
+    ${section('Coming up', soon, (s) => [s.premiered ? `Premieres ${fmtDate(Date.parse(s.premiered + 'T12:00:00'), true)}` : s.status || 'Upcoming', s.network].filter(Boolean).join(' · '))}
+    ${section('On now', now, span)}
+    ${section('Past shows', past, span)}
+    ${p.credits.length ? '' : '<p class="muted center pad">No TV roles listed.</p>'}
+    <p class="credit">Data from <a href="https://www.tvmaze.com/people/${esc(p.id)}" target="_blank" rel="noopener">TVmaze</a></p>`;
 }
 
 // ---------- events ----------
@@ -846,7 +927,7 @@ document.addEventListener('click', async (ev) => {
       track(sid, list);
       save();
       if (current.name === 'search') drawResults();
-      else if (current.name === 'discover') {
+      else if (current.name === 'discover' || current.name === 'person') {
         el.disabled = false;
         el.classList.add('on');
         el.dataset.action = 'open';

@@ -113,8 +113,39 @@ export async function fetchShow(id) {
 export async function fetchCast(id) {
   const res = await get(`/shows/${encodeURIComponent(id)}/cast`);
   return (res || []).slice(0, 15).map((c) => ({
+    id: c.person?.id ? String(c.person.id) : null,
     person: c.person?.name || '',
     character: c.character?.name || '',
     img: c.character?.image?.medium || c.person?.image?.medium || null,
   }));
+}
+
+export async function fetchPerson(id) {
+  const [p, credits] = await Promise.all([
+    get(`/people/${encodeURIComponent(id)}`),
+    get(`/people/${encodeURIComponent(id)}/castcredits?embed[]=show&embed[]=character`),
+  ]);
+  if (!p) return null;
+  // One row per show (an actor can play several characters in one show)
+  const byShow = new Map();
+  for (const c of credits || []) {
+    const sh = c._embedded?.show;
+    if (!sh) continue;
+    const id = String(sh.id);
+    const role = c._embedded?.character?.name || '';
+    const row = byShow.get(id) || { show: slimShow(sh), roles: [], voice: false };
+    if (role && !row.roles.includes(role)) row.roles.push(role);
+    row.voice = row.voice || !!c.voice;
+    byShow.set(id, row);
+  }
+  return {
+    id: String(p.id),
+    name: p.name,
+    img: p.image?.medium || null,
+    birthday: p.birthday || null,
+    deathday: p.deathday || null,
+    gender: p.gender || '',
+    country: p.country?.name || '',
+    credits: [...byShow.values()],
+  };
 }

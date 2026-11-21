@@ -230,6 +230,13 @@ body[data-view="discover"] .chips + .chips + .chips { padding-bottom: 14px; }
 .ep.w .ep-title { color: var(--muted); }
 .ep.future .ep-title { color: var(--muted); font-style: italic; }
 
+a.person { color: inherit; }
+a.person[href]:active img { opacity: .7; }
+.person-hero { display: flex; gap: 16px; align-items: center; margin: 4px 0 8px; }
+.person-hero img, .person-hero .ph { width: 104px; height: 140px; border-radius: 12px; object-fit: cover; background: var(--bg3); flex: none; font-size: 32px; }
+.person-hero h2 { font-size: 23px; margin-bottom: 6px; }
+.sub span { font-weight: 600; }
+
 /* ---------- Stats ---------- */
 .panel { background: var(--bg2); border-radius: var(--r); padding: 14px; margin-bottom: 12px; }
 .panel h3 { font-size: 15px; margin-bottom: 12px; }
