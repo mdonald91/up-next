@@ -164,6 +164,34 @@ function toggleEp(sid, eid) {
   ]);
 }
 
+// "I've seen this before": tick episodes using their air dates, so they add to your
+// total time but don't make it look like you watched them all this week.
+function markAlreadyWatched(sid, uptoSeason) {
+  const c = getCachedEps(sid);
+  if (!c) return;
+  const eps = c.eps.filter((e) => isAired(e) && !isWatched(sid, e.id) && (uptoSeason == null || e.s <= uptoSeason));
+  if (!eps.length) { toast('Nothing left to mark'); return; }
+  const undo = snapshot(sid);
+  if (!isTracked(sid)) track(sid, 'watching');
+  else if (state.shows[sid].list !== 'watching') { state.shows[sid].list = 'watching'; touch(sid); }
+  for (const e of eps) setWatched(sid, [e.id], true, airTime(e) || Date.now());
+  save();
+  rerender();
+  toast(`${plural(eps.length, 'episode')} marked as already watched`, undo);
+}
+
+function askAlreadyWatched(sid) {
+  const c = getCachedEps(sid);
+  if (!c) return;
+  const seasons = [...new Set(c.eps.filter(isAired).map((e) => e.s))];
+  const options = [{ label: 'Everything that has aired', primary: true, fn: () => markAlreadyWatched(sid, null) }];
+  // "Up to the end of season N" for shows with a manageable number of seasons
+  if (seasons.length > 1 && seasons.length <= 12) {
+    for (const n of seasons.slice(0, -1)) options.push({ label: `Up to the end of Season ${n}`, fn: () => markAlreadyWatched(sid, n) });
+  }
+  sheet(`How much of ${showInfo(sid).name} have you already seen? Episodes are dated to when they aired, so they count towards your total time but not this week.`, options);
+}
+
 function toggleSeason(sid, season) {
   const c = getCachedEps(sid);
   if (!c) return;
@@ -894,6 +922,7 @@ function drawShow(id) {
       <button class="icon-btn danger" data-action="remove" data-show="${id}" aria-label="Remove show">${ICON.trash}</button>`
     : `<button class="btn primary grow" data-action="add" data-show="${id}" data-list="watching">${ICON.plus} Add to my shows</button>
        <button class="btn" data-action="add" data-show="${id}" data-list="plan">Plan to watch</button>`;
+  const canMarkSeen = sm.left > 0;
 
   const nextLine = sm.upcoming
     ? `<div class="next-air">Next episode: <b>${code(sm.upcoming)}</b> ${esc(relDay(airTime(sm.upcoming)))}${sm.upcoming.stamp ? `, ${esc(fmtTime(airTime(sm.upcoming)))}` : ''}</div>`
@@ -932,9 +961,10 @@ function drawShow(id) {
       <div class="progress-top"><span>${sm.aired - sm.left} of ${sm.aired} watched</span><span>${sm.left ? `${plural(sm.left, 'episode')} left` : 'All caught up'}</span></div>
       <div class="bar big"><i style="width:${pct}%"></i></div>
     </div>` : ''}
-    ${tracked && (sm.watched > 0 || (state.history[id] || []).length) ? `<div class="mini-actions">
-      <span class="muted small">${(state.history[id] || []).length ? `Watched ${plural(state.history[id].length, 'time')} before${s.rewatch ? ` · now on rewatch${s.rewatch > 1 ? ` #${s.rewatch}` : ''}` : ''}` : ''}</span>
-      ${sm.watched > 0 ? `<button class="link-btn" data-action="rewatch" data-show="${id}">↻ Start a rewatch</button>` : ''}
+    ${canMarkSeen || (tracked && (sm.watched > 0 || (state.history[id] || []).length)) ? `<div class="mini-actions">
+      <span class="muted small">${tracked && (state.history[id] || []).length ? `Watched ${plural(state.history[id].length, 'time')} before${s.rewatch ? ` · now on rewatch${s.rewatch > 1 ? ` #${s.rewatch}` : ''}` : ''}` : ''}</span>
+      ${canMarkSeen ? `<button class="link-btn" data-action="seen-it" data-show="${id}">✓ Already watched</button>` : ''}
+      ${tracked && sm.watched > 0 ? `<button class="link-btn" data-action="rewatch" data-show="${id}">↻ Rewatch</button>` : ''}
     </div>` : ''}
     ${nextLine}
     ${s.summary ? `<p class="summary clamp" data-action="expand">${esc(s.summary)}</p>` : ''}
@@ -1122,6 +1152,10 @@ document.addEventListener('click', async (ev) => {
       break;
     case 'remove':
       removeShow(sid);
+      break;
+    case 'seen-it':
+      if (!getCachedEps(sid)) await loadShow(sid).catch(() => {});
+      askAlreadyWatched(sid);
       break;
     case 'rewatch': {
       const name = state.shows[sid].name;

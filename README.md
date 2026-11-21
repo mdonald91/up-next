@@ -16,6 +16,7 @@ It runs in the browser and can be installed to your phone's home screen. It has 
 - **Stats**: time spent watching, episodes per week, and top genres
 - **Sync**: keep devices in step through a private GitHub Gist (paste a token that can only touch gists)
 - **New-episode alerts**: a banner, NEW tags and an app-icon badge for episodes that aired since you last checked
+- **Already watched**: mark a whole show (or up to a season) as seen before; dated to air dates so weekly stats stay honest
 - **Rewatch**: start a show again without losing your history; rewatches count in Stats
 - **Sorting**: sort My Shows by name, recently watched, next airing, most left or recently added
 - **People search**: find actors directly from Search
